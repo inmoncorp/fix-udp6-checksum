@@ -1,4 +1,4 @@
-eBPF program to rewrite the UDP-over-IPv6 checksum.  For use only when you know the checksum is being computed wrong at the source.
+eBPF program to rewrite the UDP-over-IPv6 checksum.  For use only when you know the checksum is being computed wrong at the source.  This example is hardcoded for IPFIX only (4739/udp6).
 
 To build, you will need a system running Docker:
 
