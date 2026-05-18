@@ -24,7 +24,7 @@
 // satisfy BPF static analysis. Max stack buffer
 // in BPF is 256 bytes, so that is our chunk size.
 #define CHUNK_BYTES 256
-#define MAX_CHUNKS 6
+#define MAX_CHUNKS 8
 
 SEC("tc/ingress")
 int fix_ipfix_checksum(struct __sk_buff *skb) {
