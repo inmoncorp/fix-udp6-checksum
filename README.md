@@ -10,7 +10,7 @@ The resulting .o file can be installed to a netdev on the target system like thi
 
 To confirm installation:
 
-% ./check_status.sh
+% ./check_status.sh enp0s3
 
 To check that the kernel is not longer incrementing checksum errors:
 
