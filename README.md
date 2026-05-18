@@ -21,3 +21,7 @@ And to uninstall again:
 % ./uninstall.sh enp0s3
 
 If this workaround needs to persist across reboots then you will need to run the install command on reboot, e.g. using a systemctl unit file (not included here).
+
+A  convenient command to log the IPv6 source addresses of packets that are now making it up the stack is:
+
+% socat -b 0 -dd -u UDP6-RECV:4739 - 2>&1
