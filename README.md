@@ -1,3 +1,5 @@
+https://blog.sflow.com/2026/05/fixing-ghost-drops-how-ebpf-rescued.html
+
 eBPF program to rewrite the UDP-over-IPv6 checksum.  For use only when you know the checksum is being computed wrong at the source.  This example is hardcoded for IPFIX only (4739/udp6).
 
 To build, you will need a system running Docker:
