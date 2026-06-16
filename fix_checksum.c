@@ -20,6 +20,11 @@
 #define IP6ADDR_OFF (ETHHDR_BYTES + offsetof(struct ipv6hdr, saddr))
 #define CSUM_OFF (ETHHDR_BYTES + IPV6HDR_BYTES + offsetof(struct udphdr, check))
 
+struct vlan_hdr {
+  __u16 tci;
+  __u16 next_proto;
+} __attribute((packed));
+
 // Payload checksum will iterate in chunks to
 // satisfy BPF static analysis. Max stack buffer
 // in BPF is 256 bytes, so that is our chunk size.
@@ -37,12 +42,19 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     if ((void *)(eth + 1) > data_end)
         return TC_ACT_OK;
     __u32 proto = bpf_ntohs(eth->h_proto);
+    struct vlan_hdr *vl = NULL;
+    if(proto == ETH_P_8021Q) {
+      vl = (void *)(eth + 1);
+      if ((void *)(vl + 1) > data_end)
+        return TC_ACT_OK;
+      proto = bpf_ntohs(vl->next_proto);
+    }
     if (proto != ETH_P_IPV6)
         return TC_ACT_OK;
 
     // Parse IPv6 Header
     // Header extensions not supported
-    struct ipv6hdr *ipv6 = (void *)(eth + 1);
+    struct ipv6hdr *ipv6 = vl ? (void *)(vl + 1) : (void *)(eth + 1);
     if ((void *)(ipv6 + 1) > data_end)
         return TC_ACT_OK;
     __u8 nexthdr = ipv6->nexthdr;
