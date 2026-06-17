@@ -5,7 +5,7 @@
 #include <linux/ipv6.h>
 #include <linux/udp.h>
 #include <linux/in.h>
- 
+
 // BPF Helpers
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
@@ -31,6 +31,15 @@ struct vlan_hdr {
 #define CHUNK_BYTES 256
 #define MAX_CHUNKS 8
 
+// When LOGGING is > 0, output can be seen with:
+//   sudo cat /sys/kernel/tracing/trace_pipe
+// The larger the setting, the more output will appear, so
+// be careful because something like LOGGING 4 may
+// log a message for every received IP6 packet, which
+// could impact the performance of the system and cause
+// the kernel to drop packets.
+#define LOGGING 0
+
 SEC("tc/ingress")
 int fix_ipfix_checksum(struct __sk_buff *skb) {
     void *data_end = (void *)(long)skb->data_end;
@@ -44,6 +53,9 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     __u32 proto = bpf_ntohs(eth->h_proto);
     struct vlan_hdr *vl = NULL;
     if(proto == ETH_P_8021Q) {
+#if LOGGING > 4
+      bpf_printk("fix_checksum: VLAN header");
+#endif
       vl = (void *)(eth + 1);
       if ((void *)(vl + 1) > data_end)
         return TC_ACT_OK;
@@ -51,6 +63,10 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     }
     if (proto != ETH_P_IPV6)
         return TC_ACT_OK;
+
+#if LOGGING > 3
+    bpf_printk("fix_checksum: IP6 header");
+#endif
 
     // Parse IPv6 Header
     // Header extensions not supported
@@ -62,6 +78,10 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
 
+#if LOGGING > 2
+    bpf_printk("fix_checksum: UDP header");
+#endif
+
     // Parse UDP Header
     struct udphdr *udp = (void *)(ipv6 + 1);
     if ((void *)(udp + 1) > data_end) {
@@ -71,11 +91,13 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     if(dport != IPFIX_PORT) {
         return TC_ACT_OK;
     }
-
+#if LOGGING > 1
+    bpf_printk("fix_checksum: IPFIX packet");
+#endif
     // Pull payload into linear memory space
     if (bpf_skb_pull_data(skb, skb->len) < 0)
-        return TC_ACT_OK; 
-    
+        return TC_ACT_OK;
+
     // Re-evaluate boundaries post memory allocation shifts
     data_end = (void *)(long)skb->data_end;
     data     = (void *)(long)skb->data;
@@ -100,7 +122,7 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
         __be32 src[4];
         __be32 dst[4];
     } ip6_addrs;
-    
+
     if (bpf_skb_load_bytes(skb, IP6ADDR_OFF, &ip6_addrs, sizeof(ip6_addrs)) < 0)
         return TC_ACT_OK;
 
@@ -145,18 +167,20 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
 	    break;
         }
     }
- 
+
     // Fold the 32-bit checksum value down into a valid 16-bit 1's complement field
     __u32 folded_csum = (csum & 0xFFFF) + (csum >> 16);
     folded_csum = (folded_csum & 0xFFFF) + (folded_csum >> 16);
-    
+
     // Explicit bitwise NOT inversion to compute the true standard Internet Checksum
     __u16 final_csum = (__u16)(~folded_csum);
 
     // If the final computed checksum evaluates to 0x0000, it must be sent as 0xFFFF in IPv6 UDP
     if (final_csum == 0)
         final_csum = 0xFFFF;
-
+#if LOGGING > 0
+    bpf_printk("fix_checksum: overwriting IP6 checksum");
+#endif
     // Direct memory write back into the packet buffer's checksum field (Offset 60)
     if(bpf_skb_store_bytes(skb, CSUM_OFF, &final_csum, 2, 0) < 0)
         return TC_ACT_OK;
