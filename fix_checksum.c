@@ -74,6 +74,9 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     if ((void *)(ipv6 + 1) > data_end)
         return TC_ACT_OK;
     __u8 nexthdr = ipv6->nexthdr;
+#if LOGGING > 3
+    bpf_printk("fix_checksum: IP6 next_header=%u", nexthdr);
+#endif
     if (nexthdr != IPPROTO_UDP) {
         return TC_ACT_OK;
     }
