@@ -21,8 +21,8 @@
 #define CSUM_OFF (ETHHDR_BYTES + IPV6HDR_BYTES + offsetof(struct udphdr, check))
 
 struct vlan_hdr {
-  __u16 tci;
-  __u16 next_proto;
+    __u16 tci;
+    __u16 next_proto;
 } __attribute((packed));
 
 // Payload checksum will iterate in chunks to
@@ -40,8 +40,24 @@ struct vlan_hdr {
 // the kernel to drop packets.
 #define LOGGING 0
 
+// Uncomment EARLY_REASSEMBLE to pull the payload into
+// linear memory space right from the start. We may
+// have to do this if, for example, the NIC has
+// stripped out a VLAN header and so the first
+// skbuf fragment only goes to the end of the ethernet
+// header. In that case it is important to only
+// attach this filter to the packets we want to fix
+// (e.g. using tc(1) to apply it to 4739/udp only)
+// #define EARLY_REASSEMBLE 1
+
 SEC("tc/ingress")
 int fix_ipfix_checksum(struct __sk_buff *skb) {
+
+#ifdef EARLY_REASSEMBLE
+  if (bpf_skb_pull_data(skb, skb->len) < 0)
+      return TC_ACT_OK;
+#endif
+
     void *data_end = (void *)(long)skb->data_end;
     void *data     = (void *)(long)skb->data;
     __u8 *ptr      = data;
@@ -51,22 +67,21 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     if ((void *)(eth + 1) > data_end)
         return TC_ACT_OK;
     __u32 proto = bpf_ntohs(eth->h_proto);
-    struct vlan_hdr *vl = NULL;
-    if(proto == ETH_P_8021Q) {
-#if LOGGING > 4
-      bpf_printk("fix_checksum: VLAN header");
+#if LOGGING > 5
+    bpf_printk("fix_checksum: ETH header (proto=0x%04x)", proto);
 #endif
-      vl = (void *)(eth + 1);
-      if ((void *)(vl + 1) > data_end)
-        return TC_ACT_OK;
-      proto = bpf_ntohs(vl->next_proto);
+    struct vlan_hdr *vl = NULL;
+    if (proto == ETH_P_8021Q) {
+#if LOGGING > 4
+	bpf_printk("fix_checksum: VLAN header");
+#endif
+	vl = (void *)(eth + 1);
+	if ((void *)(vl + 1) > data_end)
+	    return TC_ACT_OK;
+	proto = bpf_ntohs(vl->next_proto);
     }
     if (proto != ETH_P_IPV6)
         return TC_ACT_OK;
-
-#if LOGGING > 3
-    bpf_printk("fix_checksum: IP6 header");
-#endif
 
     // Parse IPv6 Header
     // Header extensions not supported
@@ -75,40 +90,42 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
         return TC_ACT_OK;
     __u8 nexthdr = ipv6->nexthdr;
 #if LOGGING > 3
-    bpf_printk("fix_checksum: IP6 next_header=%u", nexthdr);
+    bpf_printk("fix_checksum: IP6 header (nxthdr=%u)", nexthdr);
 #endif
     if (nexthdr != IPPROTO_UDP) {
         return TC_ACT_OK;
     }
-
-#if LOGGING > 2
-    bpf_printk("fix_checksum: UDP header");
-#endif
-
     // Parse UDP Header
     struct udphdr *udp = (void *)(ipv6 + 1);
     if ((void *)(udp + 1) > data_end) {
         return TC_ACT_OK;
     }
     __u32 dport = bpf_ntohs(udp->dest);
-    if(dport != IPFIX_PORT) {
+#if LOGGING > 2
+    bpf_printk("fix_checksum: UDP header (dport=%u)", dport);
+#endif
+    if (dport != IPFIX_PORT) {
         return TC_ACT_OK;
     }
 #if LOGGING > 1
     bpf_printk("fix_checksum: IPFIX packet");
 #endif
+
+#ifdef EARLY_REASSEMBLE
+    // nothing to do - already contiguous
+#else
     // Pull payload into linear memory space
     if (bpf_skb_pull_data(skb, skb->len) < 0)
-        return TC_ACT_OK;
-
+      return TC_ACT_OK;
     // Re-evaluate boundaries post memory allocation shifts
     data_end = (void *)(long)skb->data_end;
     data     = (void *)(long)skb->data;
     ptr      = data;
     // Repeat verification up to end of min udp payload
     if ((void *)(ptr + MIN_BYTES) > data_end)
-        return TC_ACT_OK;
-
+      return TC_ACT_OK;
+#endif
+    
     // Determine the layer-4 payload (UDP header + payload)
     __u32 l4_len = skb->len - ETHHDR_BYTES - IPV6HDR_BYTES;
     if (l4_len < 8
@@ -150,7 +167,7 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     __u32 bytesLeft = l4_len;
     __u32 cursor = ETHHDR_BYTES + IPV6HDR_BYTES;
     for(int ii = 0; ii < MAX_CHUNKS; ii++) {
-        if(bytesLeft > CHUNK_BYTES) {
+        if (bytesLeft > CHUNK_BYTES) {
 	    if (bpf_skb_load_bytes(skb, cursor, chunk, CHUNK_BYTES) < 0)
 	        return TC_ACT_OK;
 	    csum = bpf_csum_diff(0,0,(__be32 *)chunk, CHUNK_BYTES, csum);
@@ -185,11 +202,10 @@ int fix_ipfix_checksum(struct __sk_buff *skb) {
     bpf_printk("fix_checksum: overwriting IP6 checksum");
 #endif
     // Direct memory write back into the packet buffer's checksum field (Offset 60)
-    if(bpf_skb_store_bytes(skb, CSUM_OFF, &final_csum, 2, 0) < 0)
+    if (bpf_skb_store_bytes(skb, CSUM_OFF, &final_csum, 2, 0) < 0)
         return TC_ACT_OK;
 
     return TC_ACT_OK;
 }
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";
-
